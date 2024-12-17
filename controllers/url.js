@@ -199,8 +199,6 @@ async function handleGetTopicAnalytics(req, res) {
         .json({ message: "No URLs found for the specified topic" });
     }
 
-    console.log(result);
-
     let totalClicks = 0;
     let uniqueClicks = 0;
     let clicksByDate = [];
