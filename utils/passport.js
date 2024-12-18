@@ -2,7 +2,7 @@ const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const User = require("../models/user");
 
-module.exports = function() {
+module.exports = function () {
   passport.use(
     new GoogleStrategy(
       {
@@ -31,6 +31,20 @@ module.exports = function() {
     )
   );
 
-  passport.serializeUser((user, done) => done(null, user));
-  passport.deserializeUser((user, done) => done(null, user));
+  passport.serializeUser((user, done) => {
+    console.log("Serializing user:", user);
+    done(null, user._id); // Use MongoDB _id as the unique identifier
+  });
+
+  passport.deserializeUser((id, done) => {
+    User.findById(id)
+      .then((user) => {
+        console.log("Deserializing user:", user);
+        done(null, user);
+      })
+      .catch((err) => {
+        console.error("Error in deserializing user:", err);
+        done(err, null);
+      });
+  });
 };

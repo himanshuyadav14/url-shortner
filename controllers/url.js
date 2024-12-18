@@ -6,13 +6,13 @@ const useragent = require("useragent");
 
 async function handleGenerateNewShortenUrl(req, res) {
   const body = req.body;
+  console.log(req.user);
 
   if (!body.url) {
     return res.status(400).json({ error: "url is required" });
   }
 
   const shortID = shortid.generate();
-  console.log(req.user.id);
 
   try {
     const newEntry = await URL.create({
@@ -37,6 +37,7 @@ async function handleGenerateNewShortenUrl(req, res) {
 }
 
 async function handleRedirect(req, res) {
+  console.log(req.user);
   const shortIdOrAlias = req.params.shortId;
   try {
     let entry = await URL.findOne({ customAlias: shortIdOrAlias });

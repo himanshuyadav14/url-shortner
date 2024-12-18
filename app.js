@@ -1,25 +1,31 @@
 require("dotenv").config();
 const express = require("express");
 const session = require("express-session");
+const cookieParser = require("cookie-parser");
 const passport = require("passport");
+require("./utils/passport")();
 const { connectMongoDB } = require("./utils/db");
 const authRoute = require("./routes/auth");
 const urlRoute = require("./routes/url");
+const MongoStore = require("connect-mongo");
 
 const app = express();
 
+app.use(cookieParser());
+
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 app.use(
   session({
-    secret: "secret",
+    secret: "secret290349023890",
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: false,
+    cookie: { secure: false },
   })
 );
 app.use(passport.initialize());
 app.use(passport.session());
-
-require("./utils/passport")();
 
 app.use("/", authRoute);
 app.use("/api", urlRoute);
@@ -34,7 +40,7 @@ const startServer = async () => {
     });
   } catch (error) {
     console.error("❌ Failed to start the server:", error.message);
-    process.exit(1); 
+    process.exit(1);
   }
 };
 
