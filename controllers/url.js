@@ -12,6 +12,7 @@ async function handleGenerateNewShortenUrl(req, res) {
   }
 
   const shortID = shortid.generate();
+  console.log(req.user.id);
 
   try {
     const newEntry = await URL.create({
@@ -255,10 +256,14 @@ async function handleGetTopicAnalytics(req, res) {
   }
 }
 
+async function handleGetAnalyticsOverall(req, res) {
+
+}
 
 module.exports = {
   handleGenerateNewShortenUrl,
   handleGetAnalytics,
   handleRedirect,
   handleGetTopicAnalytics,
+  handleGetAnalyticsOverall,
 };
