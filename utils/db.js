@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 async function connectMongoDB(url) {
   try {
     if (!url) throw new Error("MongoDB connection URL is not defined.");
+    console.log("here");
     await mongoose.connect(url);
     console.log("✅ Successfully connected to MongoDB.");
   } catch (error) {

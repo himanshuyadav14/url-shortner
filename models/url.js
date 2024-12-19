@@ -14,7 +14,7 @@ const urlSchema = new mongoose.Schema(
       {
         timeStamp: { type: Number, required: true },
         userAgent: { type: String, required: false, trim: true },
-        ip: { type: String, required: false, trim: true },
+        ip: { type: String, required: true, trim: true },
         geolocation: {
           country: { type: String, trim: true }, 
           region: { type: String, trim: true }, 
@@ -24,6 +24,11 @@ const urlSchema = new mongoose.Schema(
         },
       },
     ],
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true, // Make it required if necessary
+    },
   },
   { timestamps: true }
 );

@@ -33,8 +33,9 @@ app.use("/api", urlRoute);
 const PORT = process.env.PORT || 3000;
 const startServer = async () => {
   try {
+    console.log("send for connection");
     await connectMongoDB(process.env.MONGO_URI);
-
+    console.log("come from connection");
     app.listen(PORT, () => {
       console.log(`🚀 Server is running on http://localhost:${PORT}`);
     });

@@ -6,7 +6,12 @@ const useragent = require("useragent");
 
 async function handleGenerateNewShortenUrl(req, res) {
   const body = req.body;
+  const user = req.user;
   console.log(req.user);
+
+  if (!user) {
+    return res.status(401).json({ error: "Please login first" });
+  }
 
   if (!body.url) {
     return res.status(400).json({ error: "url is required" });
@@ -21,6 +26,7 @@ async function handleGenerateNewShortenUrl(req, res) {
       customAlias: body.customAlias,
       topic: body.topic || "promotion",
       visitedHistory: [],
+      userId: user.id,
     });
 
     return res.json({
@@ -28,7 +34,6 @@ async function handleGenerateNewShortenUrl(req, res) {
         newEntry.customAlias ? newEntry.customAlias : newEntry.shortId
       }`,
       createdAt: newEntry.createdAt,
-      topic: newEntry.topic,
     });
   } catch (error) {
     console.error("Error creating short URL:", error);
@@ -53,8 +58,9 @@ async function handleRedirect(req, res) {
     const timestamp = Date.now();
     const userAgent = req.headers["user-agent"];
 
-    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+    let ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
     const validIP = ip === "::1" || ip === "127.0.0.1" ? "8.8.8.8" : ip;
+    ip = validIP;
 
     const geo = geoip.lookup(validIP);
 
@@ -71,7 +77,7 @@ async function handleRedirect(req, res) {
     const visitData = {
       timeStamp: timestamp,
       userAgent,
-      validIP,
+      ip,
       geolocation,
     };
 
@@ -103,21 +109,8 @@ async function handleGetAnalytics(req, res) {
     const visitHistory = result.visitHistory;
     const totalClicks = visitHistory.length;
 
-    const userAgentString = req.headers["user-agent"];
-    const agent = useragent.parse(userAgentString);
-
-    // Global Device and OS Type
-    const deviceName = agent.isMobile
-      ? "mobile"
-      : agent.isTablet
-      ? "tablet"
-      : "desktop";
-    const osName = agent.os.toString();
-
     // Calculate unique clicks by IP
-    const uniqueUsersSet = new Set(
-      visitHistory.map((visit) => visit.ip || "unknown")
-    );
+    const uniqueUsersSet = new Set(visitHistory.map((visit) => visit.ip));
     const uniqueClicks = uniqueUsersSet.size;
 
     // Calculate clicks by date for the past 7 days
@@ -127,14 +120,16 @@ async function handleGetAnalytics(req, res) {
       const count = visitHistory.filter((visit) =>
         moment(visit.timeStamp).isSame(date, "day")
       ).length;
-
       clicksByDate.push({ date, count });
     }
 
     // OS Type Analytics
     const osTypeMap = new Map();
-
     visitHistory.forEach((visit) => {
+      const userAgentString = visit.userAgent || req.headers["user-agent"];
+      const agent = useragent.parse(userAgentString);
+      const osName = agent.os.toString();
+
       if (!osTypeMap.has(osName)) {
         osTypeMap.set(osName, {
           osName,
@@ -142,8 +137,14 @@ async function handleGetAnalytics(req, res) {
           uniqueUsers: new Set(),
         });
       }
-      osTypeMap.get(osName).uniqueClicks++;
-      osTypeMap.get(osName).uniqueUsers.add(visit.ip || "unknown");
+
+      const osData = osTypeMap.get(osName);
+
+      // Add IP to unique users and increment unique clicks if it's a new IP
+      if (!osData.uniqueUsers.has(visit.ip)) {
+        osData.uniqueUsers.add(visit.ip);
+        osData.uniqueClicks++;
+      }
     });
 
     const osType = Array.from(osTypeMap.values()).map((os) => ({
@@ -154,8 +155,15 @@ async function handleGetAnalytics(req, res) {
 
     // Device Type Analytics
     const deviceTypeMap = new Map();
-
     visitHistory.forEach((visit) => {
+      const userAgentString = visit.userAgent || req.headers["user-agent"];
+      let deviceName = "desktop"; // Default to desktop
+      if (/mobile/i.test(userAgentString)) {
+        deviceName = "mobile";
+      } else if (/tablet/i.test(userAgentString) || /iPad/i.test(userAgentString)) {
+        deviceName = "tablet";
+      }
+
       if (!deviceTypeMap.has(deviceName)) {
         deviceTypeMap.set(deviceName, {
           deviceName,
@@ -163,8 +171,14 @@ async function handleGetAnalytics(req, res) {
           uniqueUsers: new Set(),
         });
       }
-      deviceTypeMap.get(deviceName).uniqueClicks++;
-      deviceTypeMap.get(deviceName).uniqueUsers.add(visit.ip || "unknown");
+
+      const deviceData = deviceTypeMap.get(deviceName);
+
+      // Add IP to unique users and increment unique clicks if it's a new IP
+      if (!deviceData.uniqueUsers.has(visit.ip)) {
+        deviceData.uniqueUsers.add(visit.ip);
+        deviceData.uniqueClicks++;
+      }
     });
 
     const deviceTypeAnalytics = Array.from(deviceTypeMap.values()).map(
@@ -181,13 +195,14 @@ async function handleGetAnalytics(req, res) {
       uniqueClicks,
       clicksByDate,
       osType,
-      deviceType: deviceTypeAnalytics, // Changed here to use the new name
+      deviceType: deviceTypeAnalytics,
     });
   } catch (error) {
     console.error("Error fetching analytics:", error);
     return res.status(500).json({ message: "Internal Server Error" });
   }
 }
+
 
 async function handleGetTopicAnalytics(req, res) {
   const topic = req.params.topic;
@@ -257,9 +272,7 @@ async function handleGetTopicAnalytics(req, res) {
   }
 }
 
-async function handleGetAnalyticsOverall(req, res) {
-
-}
+async function handleGetAnalyticsOverall(req, res) {}
 
 module.exports = {
   handleGenerateNewShortenUrl,
