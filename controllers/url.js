@@ -160,7 +160,10 @@ async function handleGetAnalytics(req, res) {
       let deviceName = "desktop"; // Default to desktop
       if (/mobile/i.test(userAgentString)) {
         deviceName = "mobile";
-      } else if (/tablet/i.test(userAgentString) || /iPad/i.test(userAgentString)) {
+      } else if (
+        /tablet/i.test(userAgentString) ||
+        /iPad/i.test(userAgentString)
+      ) {
         deviceName = "tablet";
       }
 
@@ -202,7 +205,6 @@ async function handleGetAnalytics(req, res) {
     return res.status(500).json({ message: "Internal Server Error" });
   }
 }
-
 
 async function handleGetTopicAnalytics(req, res) {
   const topic = req.params.topic;
@@ -272,7 +274,113 @@ async function handleGetTopicAnalytics(req, res) {
   }
 }
 
-async function handleGetAnalyticsOverall(req, res) {}
+async function handleGetAnalyticsOverall(req, res) {
+  try {
+    // Assuming user is authenticated, and user ID is available in req.user
+    const userId = req.user.id;
+    console.log("userid+++",userId);
+
+    // Find all URLs created by the user
+    const urls = await URL.find({ userId });
+
+    if (!urls || urls.length === 0) {
+      return res.status(404).json({ message: "No URLs found for this user" });
+    }
+
+    let totalUrls = 0;
+    let totalClicks = 0;
+    let uniqueClicks = 0;
+    let clicksByDate = [];
+    let osTypeMap = new Map();
+    let deviceTypeMap = new Map();
+    let uniqueIps = new Set();
+
+    // Iterate through each URL and gather the analytics data
+    urls.forEach((url) => {
+      totalUrls++;
+      totalClicks += url.visitHistory.length;
+
+      // Collect unique IPs for overall unique clicks count
+      url.visitHistory.forEach((visit) => {
+        uniqueIps.add(visit.ip);
+
+        // Device Type Analytics
+        const userAgentString = visit.userAgent || req.headers["user-agent"];
+        const agent = useragent.parse(userAgentString);
+        const deviceName = /mobile/i.test(userAgentString)
+          ? "mobile"
+          : /tablet/i.test(userAgentString) || /iPad/i.test(userAgentString)
+          ? "tablet"
+          : "desktop";
+
+        // Track Device Type
+        if (!deviceTypeMap.has(deviceName)) {
+          deviceTypeMap.set(deviceName, {
+            deviceName,
+            uniqueClicks: 0,
+            uniqueUsers: new Set(),
+          });
+        }
+        const deviceData = deviceTypeMap.get(deviceName);
+        deviceData.uniqueClicks++;
+        deviceData.uniqueUsers.add(visit.ip);
+
+        // OS Type Analytics
+        const osName = agent.os.toString() || "unknown";
+        if (!osTypeMap.has(osName)) {
+          osTypeMap.set(osName, {
+            osName,
+            uniqueClicks: 0,
+            uniqueUsers: new Set(),
+          });
+        }
+        const osData = osTypeMap.get(osName);
+        osData.uniqueClicks++;
+        osData.uniqueUsers.add(visit.ip);
+      });
+
+      // Clicks by Date (for the past 7 days)
+      for (let i = 0; i < 7; i++) {
+        const date = moment().subtract(i, "days").format("YYYY-MM-DD");
+        const count = url.visitHistory.filter((visit) =>
+          moment(visit.timeStamp).isSame(date, "day")
+        ).length;
+        const existingDay = clicksByDate.find((day) => day.date === date);
+        if (existingDay) {
+          existingDay.count += count;
+        } else {
+          clicksByDate.push({ date, count });
+        }
+      }
+    });
+
+    // Convert the OS Type and Device Type Maps to arrays
+    const osType = Array.from(osTypeMap.values()).map((os) => ({
+      osName: os.osName,
+      uniqueClicks: os.uniqueClicks,
+      uniqueUsers: os.uniqueUsers.size,
+    }));
+
+    const deviceType = Array.from(deviceTypeMap.values()).map((device) => ({
+      deviceName: device.deviceName,
+      uniqueClicks: device.uniqueClicks,
+      uniqueUsers: device.uniqueUsers.size,
+    }));
+
+    // Prepare the response data
+    return res.json({
+      totalUrls,
+      totalClicks,
+      uniqueClicks: uniqueIps.size,
+      clicksByDate,
+      osType,
+      deviceType,
+    });
+  } catch (error) {
+    console.error("Error fetching overall analytics:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+}
 
 module.exports = {
   handleGenerateNewShortenUrl,
