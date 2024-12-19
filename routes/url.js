@@ -6,10 +6,10 @@ const {
   handleGetTopicAnalytics,
   handleGetAnalyticsOverall,
 } = require("../controllers/url");
-const { isAuthenticated } = require("../middlewares/auth");
+const { isAuthenticated, limiter } = require("../middlewares/auth");
 const router = express.Router();
 
-router.post("/shorten", isAuthenticated, handleGenerateNewShortenUrl);
+router.post("/shorten", isAuthenticated, limiter, handleGenerateNewShortenUrl);
 router.get("/shorten/:shortId", handleRedirect);
 router.get("/analytics/overall", handleGetAnalyticsOverall);
 router.get("/analytics/:shortId", handleGetAnalytics);
