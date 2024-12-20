@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  # Node.js backend service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongo:27017/urlshortener  # Corrected to 'mongo'
+      - BASE_URL=http://localhost:3000
+      - REDIS_URL=redis://redis:6379
+      - GOOGLE_CLIENT_ID=173684699077-sbbrkoprsf2eqht3vverrmepqidd1tp3.apps.googleusercontent.com
+      - GOOGLE_CLIENT_SECRET=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
+    depends_on:
+      - mongo
+      - redis
+
+  # MongoDB service
+  mongo:
+    image: mongo:latest
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27018:27017"
+
+  # Redis service
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+# Corrected 'volumes' section:
+volumes:
+  mongo-data: {}
