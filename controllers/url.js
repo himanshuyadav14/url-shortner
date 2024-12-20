@@ -3,6 +3,7 @@ const URL = require("../models/url");
 const geoip = require("geoip-lite");
 const moment = require("moment");
 const useragent = require("useragent");
+const redisClient = require("../redisClient");
 
 async function handleGenerateNewShortenUrl(req, res) {
   const body = req.body;
@@ -44,35 +45,39 @@ async function handleGenerateNewShortenUrl(req, res) {
 async function handleRedirect(req, res) {
   console.log(req.user);
   const shortIdOrAlias = req.params.shortId;
-  try {
-    let entry = await URL.findOne({ customAlias: shortIdOrAlias });
 
-    if (!entry) {
-      entry = await URL.findOne({ shortId: shortIdOrAlias });
+  try {
+    const cachedURL = await redisClient.get(shortIdOrAlias);
+    if (cachedURL) {
+      console.log("Cache hit");
+      return res.redirect(cachedURL);
+    } else {
+      console.log("Cache miss");
     }
 
+    const entry = await URL.findOne({
+      $or: [{ customAlias: shortIdOrAlias }, { shortId: shortIdOrAlias }],
+    });
+
     if (!entry) {
-      return res.status(404).json({ message: "URL not found" });
+      return res
+        .status(404)
+        .json({ message: `No URL found for identifier: ${shortIdOrAlias}` });
     }
 
     const timestamp = Date.now();
     const userAgent = req.headers["user-agent"];
+    const ip =
+      req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress || "8.8.8.8";
 
-    let ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
-    const validIP = ip === "::1" || ip === "127.0.0.1" ? "8.8.8.8" : ip;
-    ip = validIP;
-
-    const geo = geoip.lookup(validIP);
-
-    const geolocation = geo
-      ? {
-          country: geo.country || "",
-          region: geo.region || "",
-          city: geo.city || "",
-          lat: geo.ll ? geo.ll[0] : null,
-          lon: geo.ll ? geo.ll[1] : null,
-        }
-      : {};
+    const geo = geoip.lookup(ip) || {};
+    const geolocation = {
+      country: geo.country || "",
+      region: geo.region || "",
+      city: geo.city || "",
+      lat: geo.ll ? geo.ll[0] : null,
+      lon: geo.ll ? geo.ll[1] : null,
+    };
 
     const visitData = {
       timeStamp: timestamp,
@@ -88,6 +93,8 @@ async function handleRedirect(req, res) {
     );
 
     console.log("Redirecting to the original URL...");
+    await redisClient.set(shortIdOrAlias, entry.redirectURL, { EX: 3600 });
+
     // Redirect to the original URL
     res.redirect(entry.redirectURL);
   } catch (error) {
@@ -100,8 +107,15 @@ async function handleGetAnalytics(req, res) {
   const shortId = req.params.shortId;
 
   try {
-    const result = await URL.findOne({ shortId });
+    // Check cache
+    const cachedAnalytics = await redisClient.get(`analytics:${shortId}`);
+    if (cachedAnalytics) {
+      console.log("Cache hit");
+      return res.json(JSON.parse(cachedAnalytics));
+    }
 
+    // Fetch URL entry from DB
+    const result = await URL.findOne({ shortId });
     if (!result) {
       return res.status(404).json({ message: "URL not found" });
     }
@@ -109,19 +123,18 @@ async function handleGetAnalytics(req, res) {
     const visitHistory = result.visitHistory;
     const totalClicks = visitHistory.length;
 
-    // Calculate unique clicks by IP
+    // Unique Clicks Calculation
     const uniqueUsersSet = new Set(visitHistory.map((visit) => visit.ip));
     const uniqueClicks = uniqueUsersSet.size;
 
-    // Calculate clicks by date for the past 7 days
-    const clicksByDate = [];
-    for (let i = 0; i < 7; i++) {
+    // Clicks by Date Calculation
+    const clicksByDate = Array.from({ length: 7 }, (_, i) => {
       const date = moment().subtract(i, "days").format("YYYY-MM-DD");
       const count = visitHistory.filter((visit) =>
         moment(visit.timeStamp).isSame(date, "day")
       ).length;
-      clicksByDate.push({ date, count });
-    }
+      return { date, count };
+    });
 
     // OS Type Analytics
     const osTypeMap = new Map();
@@ -139,8 +152,6 @@ async function handleGetAnalytics(req, res) {
       }
 
       const osData = osTypeMap.get(osName);
-
-      // Add IP to unique users and increment unique clicks if it's a new IP
       if (!osData.uniqueUsers.has(visit.ip)) {
         osData.uniqueUsers.add(visit.ip);
         osData.uniqueClicks++;
@@ -160,10 +171,7 @@ async function handleGetAnalytics(req, res) {
       let deviceName = "desktop"; // Default to desktop
       if (/mobile/i.test(userAgentString)) {
         deviceName = "mobile";
-      } else if (
-        /tablet/i.test(userAgentString) ||
-        /iPad/i.test(userAgentString)
-      ) {
+      } else if (/tablet/i.test(userAgentString) || /iPad/i.test(userAgentString)) {
         deviceName = "tablet";
       }
 
@@ -176,8 +184,6 @@ async function handleGetAnalytics(req, res) {
       }
 
       const deviceData = deviceTypeMap.get(deviceName);
-
-      // Add IP to unique users and increment unique clicks if it's a new IP
       if (!deviceData.uniqueUsers.has(visit.ip)) {
         deviceData.uniqueUsers.add(visit.ip);
         deviceData.uniqueClicks++;
@@ -192,14 +198,23 @@ async function handleGetAnalytics(req, res) {
       })
     );
 
-    // Response
-    return res.json({
+    // Prepare Response Data
+    const analyticsData = {
       totalClicks,
       uniqueClicks,
       clicksByDate,
       osType,
       deviceType: deviceTypeAnalytics,
+    };
+
+    // Cache Analytics Data
+    await redisClient.set(`analytics:${shortId}`, JSON.stringify(analyticsData), {
+      EX: 600, // Cache expires in 10 minutes
     });
+
+    // Respond with Analytics
+    console.log("Cache miss - Analytics computed");
+    return res.json(analyticsData);
   } catch (error) {
     console.error("Error fetching analytics:", error);
     return res.status(500).json({ message: "Internal Server Error" });
@@ -210,6 +225,14 @@ async function handleGetTopicAnalytics(req, res) {
   const topic = req.params.topic;
 
   try {
+    // Check the cache first
+    const cachedAnalytics = await redisClient.get(`topicAnalytics:${topic}`);
+    if (cachedAnalytics) {
+      console.log("Cache hit");
+      return res.json(JSON.parse(cachedAnalytics));
+    }
+
+    // Fetch URLs for the given topic from the database
     const result = await URL.find({ topic });
 
     if (!result || result.length === 0) {
@@ -220,40 +243,35 @@ async function handleGetTopicAnalytics(req, res) {
 
     let totalClicks = 0;
     let uniqueClicks = 0;
-    let clicksByDate = [];
-    let urlsAnalytics = [];
+    const clicksByDateMap = new Map();
+    const urlsAnalytics = [];
 
     result.forEach((url) => {
-      const visitHistory = url.visitHistory;
-      const shortId = url.shortId;
+      const { visitHistory, shortId } = url;
       const shortUrl = `${process.env.BASE_URL}/shorten/${shortId}`;
 
-      // Calculate total clicks and unique clicks
+      // Calculate total and unique clicks for this URL
       totalClicks += visitHistory.length;
       const uniqueUsersSet = new Set(
         visitHistory.map((visit) => visit.ip || "unknown")
       );
       uniqueClicks += uniqueUsersSet.size;
 
-      // Calculate clicks by date for the past 7 days
+      // Aggregate clicks by date for the past 7 days
       for (let i = 0; i < 7; i++) {
         const date = moment().subtract(i, "days").format("YYYY-MM-DD");
         const count = visitHistory.filter((visit) =>
           moment(visit.timeStamp).isSame(date, "day")
         ).length;
 
-        // Record date-wise clicks for the entire topic
-        const existingDateEntry = clicksByDate.find(
-          (entry) => entry.date === date
+        // Update clicks-by-date map
+        clicksByDateMap.set(
+          date,
+          (clicksByDateMap.get(date) || 0) + count
         );
-        if (existingDateEntry) {
-          existingDateEntry.count += count;
-        } else {
-          clicksByDate.push({ date, count });
-        }
       }
 
-      // Step 3: Collect individual URL analytics
+      // Collect individual URL analytics
       urlsAnalytics.push({
         shortUrl,
         totalClicks: visitHistory.length,
@@ -261,13 +279,31 @@ async function handleGetTopicAnalytics(req, res) {
       });
     });
 
-    // Step 4: Respond with aggregated analytics data
-    return res.json({
+    // Convert clicksByDateMap to an array
+    const clicksByDate = Array.from(clicksByDateMap, ([date, count]) => ({
+      date,
+      count,
+    })).sort((a, b) => moment(a.date) - moment(b.date)); // Sort by date
+
+    // Prepare the aggregated analytics data
+    const analyticsData = {
       totalClicks,
       uniqueClicks,
       clicksByDate,
       urls: urlsAnalytics,
-    });
+    };
+
+    // Cache the analytics data for future requests
+    await redisClient.set(
+      `topicAnalytics:${topic}`,
+      JSON.stringify(analyticsData),
+      {
+        EX: 600, // Cache expires in 10 minutes
+      }
+    );
+
+    console.log("Cache miss - Analytics computed");
+    return res.json(analyticsData);
   } catch (error) {
     console.error("Error fetching analytics:", error);
     return res.status(500).json({ message: "Internal Server Error" });
@@ -277,84 +313,81 @@ async function handleGetTopicAnalytics(req, res) {
 async function handleGetAnalyticsOverall(req, res) {
   try {
     // Assuming user is authenticated, and user ID is available in req.user
-    const userId = req.user.id;
-    console.log("userid+++",userId);
+    const userId = req?.user?.id;
+    console.log("UserID:", userId);
 
-    // Find all URLs created by the user
+    // Check cache for existing analytics data
+    const cachedData = await redisClient.get(`overallAnalytics:${userId}`);
+    if (cachedData) {
+      console.log("Cache hit");
+      return res.json(JSON.parse(cachedData));
+    }
+
+    // Fetch URLs created by the user
     const urls = await URL.find({ userId });
-
     if (!urls || urls.length === 0) {
       return res.status(404).json({ message: "No URLs found for this user" });
     }
 
     let totalUrls = 0;
     let totalClicks = 0;
-    let uniqueClicks = 0;
-    let clicksByDate = [];
-    let osTypeMap = new Map();
-    let deviceTypeMap = new Map();
-    let uniqueIps = new Set();
+    const uniqueIps = new Set();
+    const clicksByDateMap = new Map();
+    const osTypeMap = new Map();
+    const deviceTypeMap = new Map();
 
-    // Iterate through each URL and gather the analytics data
+    // Process each URL and its visit history
     urls.forEach((url) => {
       totalUrls++;
       totalClicks += url.visitHistory.length;
 
-      // Collect unique IPs for overall unique clicks count
+      // Process each visit
       url.visitHistory.forEach((visit) => {
-        uniqueIps.add(visit.ip);
+        const ip = visit.ip || "unknown";
+        uniqueIps.add(ip);
 
-        // Device Type Analytics
         const userAgentString = visit.userAgent || req.headers["user-agent"];
         const agent = useragent.parse(userAgentString);
+        const osName = agent.os.toString() || "unknown";
         const deviceName = /mobile/i.test(userAgentString)
           ? "mobile"
           : /tablet/i.test(userAgentString) || /iPad/i.test(userAgentString)
           ? "tablet"
           : "desktop";
 
-        // Track Device Type
-        if (!deviceTypeMap.has(deviceName)) {
-          deviceTypeMap.set(deviceName, {
-            deviceName,
-            uniqueClicks: 0,
-            uniqueUsers: new Set(),
-          });
-        }
-        const deviceData = deviceTypeMap.get(deviceName);
-        deviceData.uniqueClicks++;
-        deviceData.uniqueUsers.add(visit.ip);
-
-        // OS Type Analytics
-        const osName = agent.os.toString() || "unknown";
+        // Aggregate OS Type
         if (!osTypeMap.has(osName)) {
-          osTypeMap.set(osName, {
-            osName,
-            uniqueClicks: 0,
-            uniqueUsers: new Set(),
-          });
+          osTypeMap.set(osName, { osName, uniqueClicks: 0, uniqueUsers: new Set() });
         }
         const osData = osTypeMap.get(osName);
         osData.uniqueClicks++;
-        osData.uniqueUsers.add(visit.ip);
-      });
+        osData.uniqueUsers.add(ip);
 
-      // Clicks by Date (for the past 7 days)
-      for (let i = 0; i < 7; i++) {
-        const date = moment().subtract(i, "days").format("YYYY-MM-DD");
-        const count = url.visitHistory.filter((visit) =>
-          moment(visit.timeStamp).isSame(date, "day")
-        ).length;
-        const existingDay = clicksByDate.find((day) => day.date === date);
-        if (existingDay) {
-          existingDay.count += count;
-        } else {
-          clicksByDate.push({ date, count });
+        // Aggregate Device Type
+        if (!deviceTypeMap.has(deviceName)) {
+          deviceTypeMap.set(deviceName, { deviceName, uniqueClicks: 0, uniqueUsers: new Set() });
         }
-      }
+        const deviceData = deviceTypeMap.get(deviceName);
+        deviceData.uniqueClicks++;
+        deviceData.uniqueUsers.add(ip);
+
+        // Aggregate clicks by date for the past 7 days
+        for (let i = 0; i < 7; i++) {
+          const date = moment().subtract(i, "days").format("YYYY-MM-DD");
+          const isSameDate = moment(visit.timeStamp).isSame(date, "day");
+          if (isSameDate) {
+            clicksByDateMap.set(date, (clicksByDateMap.get(date) || 0) + 1);
+          }
+        }
+      });
     });
 
-    // Convert the OS Type and Device Type Maps to arrays
+    // Convert maps to arrays and prepare final analytics
+    const clicksByDate = Array.from(clicksByDateMap, ([date, count]) => ({
+      date,
+      count,
+    })).sort((a, b) => moment(a.date) - moment(b.date));
+
     const osType = Array.from(osTypeMap.values()).map((os) => ({
       osName: os.osName,
       uniqueClicks: os.uniqueClicks,
@@ -367,15 +400,23 @@ async function handleGetAnalyticsOverall(req, res) {
       uniqueUsers: device.uniqueUsers.size,
     }));
 
-    // Prepare the response data
-    return res.json({
+    // Final analytics data
+    const analyticsData = {
       totalUrls,
       totalClicks,
       uniqueClicks: uniqueIps.size,
       clicksByDate,
       osType,
       deviceType,
+    };
+
+    // Cache the analytics data with a TTL of 10 minutes
+    await redisClient.set(`overallAnalytics:${userId}`, JSON.stringify(analyticsData), {
+      EX: 600, // Cache expires in 10 minutes
     });
+
+    console.log("Cache miss - Analytics computed");
+    return res.json(analyticsData);
   } catch (error) {
     console.error("Error fetching overall analytics:", error);
     return res.status(500).json({ message: "Internal Server Error" });
