@@ -10,7 +10,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - MONGO_URI=mongodb://mongo:27017/urlshortener  # Corrected to 'mongo'
+      - MONGO_URI=mongodb+srv://thealteroffice:wkjefwefh23u48239rwlkfj89@cluster0.w2wen.mongodb.net/?retryWrites=true  # Corrected to 'mongo'
       - BASE_URL=http://localhost:3000
       - REDIS_URL=redis://redis:6379
       - GOOGLE_CLIENT_ID=173684699077-sbbrkoprsf2eqht3vverrmepqidd1tp3.apps.googleusercontent.com

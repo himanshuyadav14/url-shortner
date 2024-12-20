@@ -15,5 +15,4 @@ router.get("/analytics/overall", handleGetAnalyticsOverall);
 router.get("/analytics/:shortId", handleGetAnalytics);
 router.get("/analytics/topic/:topic", handleGetTopicAnalytics);
 
-
 module.exports = router;

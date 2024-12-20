@@ -31,7 +31,7 @@ async function handleGenerateNewShortenUrl(req, res) {
     });
 
     return res.json({
-      shortURL: `${process.env.BASE_URL}/shorten/${
+      shortURL: `${process.env.BASE_URL}/api/shorten/${
         newEntry.customAlias ? newEntry.customAlias : newEntry.shortId
       }`,
       createdAt: newEntry.createdAt,
